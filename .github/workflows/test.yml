@@ -15,7 +15,7 @@ jobs:
       - name: Install Godot
         uses: chickensoft-games/setup-godot@v2
         with:
-          version: latest
+          version: 4.6-stable
           use-dotnet: false
 
       - name: Check Godot version
