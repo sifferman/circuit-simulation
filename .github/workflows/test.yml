@@ -28,15 +28,9 @@ jobs:
 
       - name: Build GDExtension for Web
         run: scons platform=web
-
-      - name: Check Godot version
-        run: godot --version
         
       - name: Test godot engine
         run: godot --headless --editor --quit
-    
-      - name: List repository files
-        run: ls project
 
       - name: Show export presets
         run: cat project/export_presets.cfg
@@ -44,7 +38,7 @@ jobs:
       - name: Export Web build
         run: |
           mkdir -p build/web
-          godot --headless --path project --export-release "Web" build/web/index.html
+          godot --headless --path project --export-debug "Web" build/web/index.html
         
       - name: Show build output
         run: ls build/web
