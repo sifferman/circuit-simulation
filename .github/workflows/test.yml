@@ -27,7 +27,9 @@ jobs:
         uses: mymindstorm/setup-emsdk@v14
 
       - name: Build GDExtension for Web
-        run: scons platform=web
+        run: |
+          mkdir -p project/bin
+          scons platform=web
         
       - name: Test godot engine
         run: godot --headless --editor --quit
