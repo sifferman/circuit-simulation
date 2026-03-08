@@ -29,6 +29,11 @@ jobs:
       - name: Install ngspice
         run: sudo apt-get update && sudo apt-get install -y ngspice-dev
 
+        #debug
+      - name: Find ngspice headers
+        run: |
+          find /usr/include -name "sharedspice.h"
+
       - name: Copy headers locally
         run: |
           mkdir -p ngspice
