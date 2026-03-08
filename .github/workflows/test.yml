@@ -48,7 +48,7 @@ jobs:
         
       - name: Export Web build
         run: |
-          mkdir -p project/build/web
+          mkdir -p project/build/web/web_dlink_debug
           godot --headless --path project --export-debug "Web" build/web/index.html
         
       - name: Show build output
