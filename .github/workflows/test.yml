@@ -29,8 +29,11 @@ jobs:
       - name: Build GDExtension for Web
         run: |
           mkdir -p project/bin
-          scons platform=web
-        
+          scons platform=web target=template_debug
+
+      - name: Check build
+        run: ls project/bin
+          
       - name: Test godot engine
         run: godot --headless --editor --quit
 
