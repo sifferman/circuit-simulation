@@ -34,10 +34,12 @@ std::string trim_copy(const std::string &input) {
     while (start < input.size() && std::isspace(static_cast<unsigned char>(input[start]))) {
         start++;
     }
+
     size_t end = input.size();
     while (end > start && std::isspace(static_cast<unsigned char>(input[end - 1]))) {
         end--;
     }
+
     return input.substr(start, end - start);
 }
 
@@ -95,6 +97,7 @@ std::string resolve_path_token(const std::string &raw_path, const fs::path &base
     if (expanded.empty()) {
         return expanded;
     }
+
     fs::path p(expanded);
     if (p.is_relative()) {
         p = fs::absolute(base_dir / p);
@@ -110,6 +113,7 @@ bool read_file_lines(const fs::path &file_path, std::vector<std::string> &lines_
     if (!file.is_open()) {
         return false;
     }
+
     std::string line;
     while (std::getline(file, line)) {
         if (!line.empty() && line.back() == '\r') {
@@ -191,7 +195,6 @@ std::string rewrite_input_file_path(const std::string &line, const fs::path &bas
 CircuitSimulator* CircuitSimulator::instance = nullptr;
 
 // Callback functions for ngspice *************************************************************
-
 // Streams ngspice console output to Godot and an exposed signal.
 static int ng_send_char(char *output, int id, void *user_data) {
     (void)id;
@@ -203,11 +206,12 @@ static int ng_send_char(char *output, int id, void *user_data) {
     return 0;
 }
 
-// Receives status updates from ngspice (currently unused).
+// Receives status updates from ngspice (currently ignored).
 static int ng_send_stat(char *status, int id, void *user_data) {
     (void)status;
     (void)id;
     (void)user_data;
+    // Status updates during simulation
     return 0;
 }
 
@@ -223,11 +227,11 @@ static int ng_controlled_exit(int status, bool immediate, bool exit_on_quit, int
 }
 
 // Publishes streamed simulation samples while ngspice runs.
-// Emits data as PackedFloat64Array for efficient animation consumption.
 static int ng_send_data(pvecvaluesall data, int count, int id, void *user_data) {
     (void)count;
     (void)id;
     (void)user_data;
+    // Called during simulation with new data points
     if (CircuitSimulator::instance && data != nullptr) {
         PackedFloat64Array sample;
         sample.resize(data->veccount);
@@ -241,11 +245,62 @@ static int ng_send_data(pvecvaluesall data, int count, int id, void *user_data) 
     return 0;
 }
 
+#ifdef XSPICE
+// Receives event-node updates (XSPICE/event simulation path).
+static int ng_send_evt_data(
+    int node_index,
+    double sim_time,
+    double plot_value,
+    char *print_value,
+    void *raw_value,
+    int value_type,
+    int node_type,
+    int more,
+    void *user_data
+) {
+    (void)raw_value;
+    (void)user_data;
+    if (CircuitSimulator::instance) {
+        Dictionary event_data;
+        event_data["node_index"] = node_index;
+        event_data["time"] = sim_time;
+        event_data["plot_value"] = plot_value;
+        event_data["print_value"] = print_value ? String(print_value) : String();
+        event_data["value_type"] = value_type;
+        event_data["node_type"] = node_type;
+        event_data["more"] = more;
+        CircuitSimulator::instance->call_deferred("emit_signal", "simulation_event_data", event_data);
+    }
+    return 0;
+}
+
+// Receives metadata for event nodes before event simulation starts.
+static int ng_send_init_evt_data(
+    int node_index,
+    int udn_index,
+    char *node_name,
+    char *udn_name,
+    int id,
+    void *user_data
+) {
+    (void)id;
+    (void)user_data;
+    UtilityFunctions::print(
+        "Event node initialized idx=" + String::num_int64(node_index) +
+        " udn_idx=" + String::num_int64(udn_index) +
+        " name=" + (node_name ? String(node_name) : String()) +
+        " udn=" + (udn_name ? String(udn_name) : String())
+    );
+    return 0;
+}
+#endif
+
 // Receives vector metadata once a simulation is initialized.
 static int ng_send_init_data(pvecinfoall data, int id, void *user_data) {
     (void)id;
     (void)user_data;
     const int vector_count = (data != nullptr) ? data->veccount : 0;
+    // Called before simulation with vector info
     if (CircuitSimulator::instance && data != nullptr) {
         PackedStringArray signal_names;
         for (int i = 0; i < data->veccount; i++) {
@@ -269,57 +324,23 @@ static int ng_bg_thread_running(bool running, int id, void *user_data) {
         if (running) {
             CircuitSimulator::instance->call_deferred("emit_signal", "simulation_started");
         } else {
-            // Snapshot the callback buffer NOW (ngspice thread) before any new simulation
-            // can clear it via ingest_callback_signal_names on the main thread.
-            CircuitSimulator::instance->capture_completed_snapshot();
             CircuitSimulator::instance->call_deferred("emit_signal", "simulation_finished");
         }
     }
     return 0;
 }
 
-// Provides voltage values to ngspice for interactive voltage source control.
-static int ng_get_vsrc_data(double *voltage, double time, char *node_name, int id, void *user_data) {
-    (void)time;
-    (void)id;
-    (void)user_data;
-    if (CircuitSimulator::instance) {
-        *voltage = CircuitSimulator::instance->get_voltage_source(String(node_name));
-    }
-    return 0;
-}
-
-// Registers all methods and signals exposed to GDScript.
+// Registers methods and signals exposed to GDScript.
 void CircuitSimulator::_bind_methods() {
-    // Initialization
+    // Minimal runtime API used by the current Godot UI.
     ClassDB::bind_method(D_METHOD("initialize_ngspice"), &CircuitSimulator::initialize_ngspice);
-    ClassDB::bind_method(D_METHOD("shutdown_ngspice"), &CircuitSimulator::shutdown_ngspice);
-    ClassDB::bind_method(D_METHOD("is_initialized"), &CircuitSimulator::is_initialized);
-
-    // Circuit loading
     ClassDB::bind_method(D_METHOD("load_netlist", "netlist_path", "pdk_root"), &CircuitSimulator::load_netlist, DEFVAL(""));
     ClassDB::bind_method(D_METHOD("load_netlist_string", "netlist_content"), &CircuitSimulator::load_netlist_string);
-    ClassDB::bind_method(D_METHOD("get_current_netlist"), &CircuitSimulator::get_current_netlist);
-
-    // Synchronous simulation control
     ClassDB::bind_method(D_METHOD("run_simulation"), &CircuitSimulator::run_simulation);
-    ClassDB::bind_method(D_METHOD("run_transient", "step", "stop", "start"), &CircuitSimulator::run_transient, DEFVAL(0.0));
-    ClassDB::bind_method(D_METHOD("run_dc", "source", "start", "stop", "step"), &CircuitSimulator::run_dc);
-    ClassDB::bind_method(D_METHOD("stop_simulation"), &CircuitSimulator::stop_simulation);
-    ClassDB::bind_method(D_METHOD("is_running"), &CircuitSimulator::is_running);
-
-    // Post-simulation data retrieval
-    ClassDB::bind_method(D_METHOD("get_voltage", "node_name"), &CircuitSimulator::get_voltage);
-    ClassDB::bind_method(D_METHOD("get_current", "source_name"), &CircuitSimulator::get_current);
-    ClassDB::bind_method(D_METHOD("get_time_vector"), &CircuitSimulator::get_time_vector);
     ClassDB::bind_method(D_METHOD("get_all_vectors"), &CircuitSimulator::get_all_vectors);
-    ClassDB::bind_method(D_METHOD("get_all_vector_names"), &CircuitSimulator::get_all_vector_names);
+    ClassDB::bind_method(D_METHOD("get_last_sim_snapshot"), &CircuitSimulator::get_last_sim_snapshot);
+    ClassDB::bind_method(D_METHOD("get_last_sim_signal_names"), &CircuitSimulator::get_last_sim_signal_names);
 
-    // Interactive voltage source control
-    ClassDB::bind_method(D_METHOD("set_voltage_source", "source_name", "voltage"), &CircuitSimulator::set_voltage_source);
-    ClassDB::bind_method(D_METHOD("get_voltage_source", "source_name"), &CircuitSimulator::get_voltage_source);
-
-    // Continuous transient streaming
     ClassDB::bind_method(
         D_METHOD("start_continuous_transient", "step", "window", "sleep_ms"),
         &CircuitSimulator::start_continuous_transient,
@@ -328,8 +349,6 @@ void CircuitSimulator::_bind_methods() {
     ClassDB::bind_method(D_METHOD("stop_continuous_transient"), &CircuitSimulator::stop_continuous_transient);
     ClassDB::bind_method(D_METHOD("is_continuous_transient_running"), &CircuitSimulator::is_continuous_transient_running);
     ClassDB::bind_method(D_METHOD("get_continuous_memory_signal_names"), &CircuitSimulator::get_continuous_memory_signal_names);
-
-    // In-memory sample buffer
     ClassDB::bind_method(
         D_METHOD("configure_continuous_memory_buffer", "signals", "max_samples"),
         &CircuitSimulator::configure_continuous_memory_buffer,
@@ -344,32 +363,32 @@ void CircuitSimulator::_bind_methods() {
         DEFVAL(int64_t(256))
     );
     ClassDB::bind_method(D_METHOD("get_continuous_memory_sample_count"), &CircuitSimulator::get_continuous_memory_sample_count);
-    ClassDB::bind_method(D_METHOD("get_last_sim_snapshot"), &CircuitSimulator::get_last_sim_snapshot);
-    ClassDB::bind_method(D_METHOD("get_last_sim_signal_names"), &CircuitSimulator::get_last_sim_signal_names);
 
     // Signals
     ADD_SIGNAL(MethodInfo("simulation_started"));
     ADD_SIGNAL(MethodInfo("simulation_finished"));
     ADD_SIGNAL(MethodInfo("simulation_data_ready", PropertyInfo(Variant::PACKED_FLOAT64_ARRAY, "data")));
+    ADD_SIGNAL(MethodInfo("simulation_event_data", PropertyInfo(Variant::DICTIONARY, "event")));
     ADD_SIGNAL(MethodInfo("ngspice_output", PropertyInfo(Variant::STRING, "message")));
     ADD_SIGNAL(MethodInfo("continuous_transient_started"));
     ADD_SIGNAL(MethodInfo("continuous_transient_stopped"));
     ADD_SIGNAL(MethodInfo("continuous_transient_frame", PropertyInfo(Variant::DICTIONARY, "frame")));
 }
 
-// Initializes all simulator state and function pointer slots.
+// Initializes simulator state and ngspice function pointers.
 CircuitSimulator::CircuitSimulator() {
     initialized = false;
     current_netlist = "";
     ngspice_handle = nullptr;
     ng_Init = nullptr;
-    ng_Init_Sync = nullptr;
+#ifdef XSPICE
+    ng_Init_Evt = nullptr;
+#endif
     ng_Command = nullptr;
     ng_Circ = nullptr;
     ng_Running = nullptr;
     ng_GetVecInfo = nullptr;
     ng_CurPlot = nullptr;
-    ng_AllPlots = nullptr;
     ng_AllVecs = nullptr;
     continuous_stop_requested = false;
     continuous_running = false;
@@ -380,7 +399,7 @@ CircuitSimulator::CircuitSimulator() {
     continuous_sample_count.store(0);
     continuous_sleep_ms = 25;
     continuous_emit_stride = 64;
-    buffer_stdout_stride = 0;  // Disabled: verbose per-sample logging causes ngspice output overflow
+    buffer_stdout_stride = 10;
     callback_time_index.store(-1);
     memory_buffer_enabled = true;
     memory_max_samples = 10000;
@@ -399,11 +418,12 @@ CircuitSimulator::~CircuitSimulator() {
     }
 }
 
-// Dynamically loads the ngspice shared library and all required symbols.
+// Dynamically loads the ngspice shared library and required symbols.
 bool CircuitSimulator::load_ngspice_library() {
 #ifdef _WIN32
     ngspice_handle = LoadLibraryA("ngspice.dll");
     if (!ngspice_handle) {
+        // Try loading from bin folder
         ngspice_handle = LoadLibraryA("bin/ngspice.dll");
     }
     if (!ngspice_handle) {
@@ -413,8 +433,10 @@ bool CircuitSimulator::load_ngspice_library() {
 
     ng_Init = (int (*)(SendChar*, SendStat*, ControlledExit*, SendData*, SendInitData*, BGThreadRunning*, void*))
         GetProcAddress(ngspice_handle, "ngSpice_Init");
-    ng_Init_Sync = (int (*)(GetVSRCData*, GetISRCData*, GetSyncData*, int*, void*))
-        GetProcAddress(ngspice_handle, "ngSpice_Init_Sync");
+#ifdef XSPICE
+    ng_Init_Evt = (int (*)(SendEvtData*, SendInitEvtData*, void*))
+        GetProcAddress(ngspice_handle, "ngSpice_Init_Evt");
+#endif
     ng_Command = (int (*)(char*))
         GetProcAddress(ngspice_handle, "ngSpice_Command");
     ng_Circ = (int (*)(char**))
@@ -425,8 +447,6 @@ bool CircuitSimulator::load_ngspice_library() {
         GetProcAddress(ngspice_handle, "ngGet_Vec_Info");
     ng_CurPlot = (char* (*)())
         GetProcAddress(ngspice_handle, "ngSpice_CurPlot");
-    ng_AllPlots = (char** (*)())
-        GetProcAddress(ngspice_handle, "ngSpice_AllPlots");
     ng_AllVecs = (char** (*)(char*))
         GetProcAddress(ngspice_handle, "ngSpice_AllVecs");
 #else
@@ -486,8 +506,10 @@ bool CircuitSimulator::load_ngspice_library() {
 
     ng_Init = (int (*)(SendChar*, SendStat*, ControlledExit*, SendData*, SendInitData*, BGThreadRunning*, void*))
         dlsym(ngspice_handle, "ngSpice_Init");
-    ng_Init_Sync = (int (*)(GetVSRCData*, GetISRCData*, GetSyncData*, int*, void*))
-        dlsym(ngspice_handle, "ngSpice_Init_Sync");
+#ifdef XSPICE
+    ng_Init_Evt = (int (*)(SendEvtData*, SendInitEvtData*, void*))
+        dlsym(ngspice_handle, "ngSpice_Init_Evt");
+#endif
     ng_Command = (int (*)(char*))
         dlsym(ngspice_handle, "ngSpice_Command");
     ng_Circ = (int (*)(char**))
@@ -498,8 +520,6 @@ bool CircuitSimulator::load_ngspice_library() {
         dlsym(ngspice_handle, "ngGet_Vec_Info");
     ng_CurPlot = (char* (*)())
         dlsym(ngspice_handle, "ngSpice_CurPlot");
-    ng_AllPlots = (char** (*)())
-        dlsym(ngspice_handle, "ngSpice_AllPlots");
     ng_AllVecs = (char** (*)(char*))
         dlsym(ngspice_handle, "ngSpice_AllVecs");
 #endif
@@ -528,7 +548,7 @@ void CircuitSimulator::unload_ngspice_library() {
 #endif
 }
 
-// Initializes ngspice and wires all callback hooks.
+// Initializes ngspice and wires callback hooks.
 bool CircuitSimulator::initialize_ngspice() {
     if (initialized) {
         UtilityFunctions::print("ngspice already initialized");
@@ -555,10 +575,14 @@ bool CircuitSimulator::initialize_ngspice() {
         return false;
     }
 
-    // Set up voltage source callback for interactive simulation control.
-    if (ng_Init_Sync) {
-        ng_Init_Sync(ng_get_vsrc_data, nullptr, nullptr, nullptr, this);
+#ifdef XSPICE
+    if (ng_Init_Evt) {
+        int evt_ret = ng_Init_Evt(ng_send_evt_data, ng_send_init_evt_data, this);
+        if (evt_ret != 0) {
+            UtilityFunctions::printerr("ngSpice_Init_Evt failed with code: " + String::num_int64(evt_ret));
+        }
     }
+#endif
 
     initialized = true;
     UtilityFunctions::print("ngspice initialized successfully");
@@ -575,8 +599,8 @@ void CircuitSimulator::shutdown_ngspice() {
     }
 
     if (ng_Command) {
-        // Halt background execution and reset state instead of invoking com_quit,
-        // which can crash on some macOS/libngspice builds during teardown.
+        // In embedded mode, quit may crash on some macOS/libngspice builds during teardown.
+        // Halt background execution and reset state instead of invoking com_quit.
         ng_Command((char*)"bg_halt");
         if (ng_Running) {
             for (int i = 0; i < 50 && ng_Running(); i++) {
@@ -591,13 +615,7 @@ void CircuitSimulator::shutdown_ngspice() {
     UtilityFunctions::print("ngspice shut down");
 }
 
-bool CircuitSimulator::is_initialized() const {
-    return initialized;
-}
-
-// Normalizes and loads a SPICE deck via ngSpice_Circ.
-// Strips .control blocks, rewrites .include/.lib to absolute paths,
-// and expands PDK_ROOT references.
+// Normalizes and loads a SPICE deck. Transient/save commands are API-driven.
 Dictionary CircuitSimulator::load_netlist(const String &netlist_path, const String &pdk_root) {
     Dictionary result;
 
@@ -627,8 +645,6 @@ Dictionary CircuitSimulator::load_netlist(const String &netlist_path, const Stri
 
     bool inside_control = false;
     bool has_end = false;
-    bool has_analysis = false;
-    std::vector<std::string> control_analyses; // .tran/.ac/.dc/.op extracted from .control
 
     for (const std::string &original_line : logical_lines) {
         std::string trimmed = trim_copy(original_line);
@@ -642,12 +658,6 @@ Dictionary CircuitSimulator::load_netlist(const String &netlist_path, const Stri
                 inside_control = false;
                 continue;
             }
-            // Preserve analysis commands from .control as top-level deck commands.
-            std::string lower = to_lower_copy(trimmed);
-            if (starts_with_ci(lower, "tran ") || starts_with_ci(lower, "ac ") ||
-                starts_with_ci(lower, "dc ") || starts_with_ci(lower, "op")) {
-                control_analyses.push_back("." + trimmed);
-            }
             continue;
         }
 
@@ -659,19 +669,9 @@ Dictionary CircuitSimulator::load_netlist(const String &netlist_path, const Stri
         if (rewritten_lower == ".end") {
             has_end = true;
         }
-        if (starts_with_ci(rewritten_lower, ".tran") || starts_with_ci(rewritten_lower, ".ac") ||
-            starts_with_ci(rewritten_lower, ".dc") || starts_with_ci(rewritten_lower, ".op")) {
-            has_analysis = true;
-        }
         normalized_lines.push_back(rewritten);
     }
 
-    // Inject analysis commands extracted from .control before .end.
-    if (!has_analysis) {
-        for (const std::string &analysis : control_analyses) {
-            normalized_lines.push_back(analysis);
-        }
-    }
     if (!has_end) {
         normalized_lines.push_back(".end");
     }
@@ -700,203 +700,48 @@ Dictionary CircuitSimulator::load_netlist(const String &netlist_path, const Stri
     return result;
 }
 
-// Loads a netlist from an in-memory string via ngSpice_Circ.
 bool CircuitSimulator::load_netlist_string(const String &netlist_content) {
     if (!initialized) {
         UtilityFunctions::printerr("ngspice not initialized");
         return false;
     }
-
     if (!ng_Circ) {
         UtilityFunctions::printerr("ngSpice_Circ not available");
         return false;
     }
 
     PackedStringArray lines = netlist_content.split("\n");
-    std::vector<char*> circ_lines;
+    std::vector<char *> circ_lines;
     std::vector<std::string> line_storage;
+    circ_lines.reserve(lines.size() + 1);
+    line_storage.reserve(lines.size());
 
     for (int i = 0; i < lines.size(); i++) {
         line_storage.push_back(std::string(lines[i].utf8().get_data()));
-        circ_lines.push_back(const_cast<char*>(line_storage.back().c_str()));
+        circ_lines.push_back(const_cast<char *>(line_storage.back().c_str()));
     }
     circ_lines.push_back(nullptr);
 
-    int ret = ng_Circ(circ_lines.data());
+    const int ret = ng_Circ(circ_lines.data());
     if (ret != 0) {
         UtilityFunctions::printerr("Failed to load netlist from string");
         return false;
     }
 
     current_netlist = netlist_content;
-    UtilityFunctions::print("Loaded netlist from string");
     return true;
 }
 
-String CircuitSimulator::get_current_netlist() const {
-    return current_netlist;
-}
-
-// Triggers a background simulation run (bg_run).
 bool CircuitSimulator::run_simulation() {
-    if (!initialized) {
+    if (!initialized || !ng_Command) {
         UtilityFunctions::printerr("ngspice not initialized");
         return false;
     }
-    int ret = ng_Command((char*)"bg_run");
+    const int ret = ng_Command((char *)"bg_run");
     return ret == 0;
 }
 
-// Runs a transient analysis synchronously.
-bool CircuitSimulator::run_transient(double step, double stop, double start) {
-    if (!initialized) {
-        UtilityFunctions::printerr("ngspice not initialized");
-        return false;
-    }
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "tran %g %g %g", step, stop, start);
-    int ret = ng_Command(cmd);
-    return ret == 0;
-}
-
-// Runs a DC sweep analysis synchronously.
-bool CircuitSimulator::run_dc(const String &source, double start, double stop, double step) {
-    if (!initialized) {
-        UtilityFunctions::printerr("ngspice not initialized");
-        return false;
-    }
-    CharString source_utf8 = source.utf8();
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "dc %s %g %g %g", source_utf8.get_data(), start, stop, step);
-    int ret = ng_Command(cmd);
-    return ret == 0;
-}
-
-// Halts any running background simulation.
-void CircuitSimulator::stop_simulation() {
-    if (!initialized) {
-        return;
-    }
-    ng_Command((char*)"bg_halt");
-    UtilityFunctions::print("Simulation stopped");
-}
-
-bool CircuitSimulator::is_running() const {
-    if (!initialized || !ng_Running) {
-        return false;
-    }
-    return ng_Running();
-}
-
-// Returns the voltage waveform for a named node from the current plot.
-Array CircuitSimulator::get_voltage(const String &node_name) {
-    Array result;
-    if (!initialized || !ng_GetVecInfo) {
-        return result;
-    }
-    CharString name_utf8 = (String("v(") + node_name + ")").utf8();
-    pvector_info vec = ng_GetVecInfo((char*)name_utf8.get_data());
-    if (vec && vec->v_realdata) {
-        for (int i = 0; i < vec->v_length; i++) {
-            result.append(vec->v_realdata[i]);
-        }
-    }
-    return result;
-}
-
-// Returns the current waveform for a named source from the current plot.
-Array CircuitSimulator::get_current(const String &source_name) {
-    Array result;
-    if (!initialized || !ng_GetVecInfo) {
-        return result;
-    }
-    CharString name_utf8 = (String("i(") + source_name + ")").utf8();
-    pvector_info vec = ng_GetVecInfo((char*)name_utf8.get_data());
-    if (vec && vec->v_realdata) {
-        for (int i = 0; i < vec->v_length; i++) {
-            result.append(vec->v_realdata[i]);
-        }
-    }
-    return result;
-}
-
-// Returns the time vector from the current plot.
-Array CircuitSimulator::get_time_vector() {
-    Array result;
-    if (!initialized || !ng_GetVecInfo) {
-        return result;
-    }
-    pvector_info vec = ng_GetVecInfo((char*)"time");
-    if (vec && vec->v_realdata) {
-        for (int i = 0; i < vec->v_length; i++) {
-            result.append(vec->v_realdata[i]);
-        }
-    }
-    return result;
-}
-
-// Returns all simulation vectors from the current plot as a Dictionary.
-Dictionary CircuitSimulator::get_all_vectors() {
-    Dictionary result;
-    if (!initialized || !ng_CurPlot || !ng_AllVecs || !ng_GetVecInfo) {
-        return result;
-    }
-    char* cur_plot = ng_CurPlot();
-    if (!cur_plot) {
-        return result;
-    }
-    char** all_vecs = ng_AllVecs(cur_plot);
-    if (!all_vecs) {
-        return result;
-    }
-    for (int i = 0; all_vecs[i] != nullptr; i++) {
-        pvector_info vec = ng_GetVecInfo(all_vecs[i]);
-        if (vec && vec->v_realdata) {
-            Array data;
-            for (int j = 0; j < vec->v_length; j++) {
-                data.append(vec->v_realdata[j]);
-            }
-            result[String(all_vecs[i])] = data;
-        }
-    }
-    return result;
-}
-
-// Returns names of all vectors in the current plot.
-PackedStringArray CircuitSimulator::get_all_vector_names() {
-    PackedStringArray result;
-    if (!initialized || !ng_CurPlot || !ng_AllVecs) {
-        return result;
-    }
-    char* cur_plot = ng_CurPlot();
-    if (!cur_plot) {
-        return result;
-    }
-    char** all_vecs = ng_AllVecs(cur_plot);
-    if (!all_vecs) {
-        return result;
-    }
-    for (int i = 0; all_vecs[i] != nullptr; i++) {
-        result.append(String(all_vecs[i]));
-    }
-    return result;
-}
-
-// Stores a named voltage value for the interactive voltage source callback.
-void CircuitSimulator::set_voltage_source(const String &source_name, double voltage) {
-    voltage_sources[source_name] = voltage;
-    UtilityFunctions::print("Set " + source_name + " to " + String::num(voltage) + "V");
-}
-
-// Retrieves a stored voltage source value.
-double CircuitSimulator::get_voltage_source(const String &source_name) {
-    if (voltage_sources.has(source_name)) {
-        return (double)voltage_sources[source_name];
-    }
-    return 0.0;
-}
-
-// Starts a looping transient stream that emits frame snapshots.
+// Starts a transient stream that emits frame snapshots.
 bool CircuitSimulator::start_continuous_transient(double step, double window, int64_t sleep_ms) {
     if (!initialized || !ng_Command) {
         UtilityFunctions::printerr("ngspice not initialized");
@@ -979,10 +824,12 @@ void CircuitSimulator::stop_continuous_thread() {
     continuous_running = false;
 }
 
+// Public wrapper to stop continuous transient streaming.
 void CircuitSimulator::stop_continuous_transient() {
     stop_continuous_thread();
 }
 
+// Reports whether continuous transient mode is active.
 bool CircuitSimulator::is_continuous_transient_running() const {
     return continuous_running.load();
 }
@@ -990,13 +837,14 @@ bool CircuitSimulator::is_continuous_transient_running() const {
 // Resolves callback time using the discovered "time" vector index.
 double CircuitSimulator::resolve_callback_time(const PackedFloat64Array &sample) const {
     int32_t time_index = callback_time_index.load();
+
     if (time_index >= 0 && time_index < sample.size()) {
         return sample[time_index];
     }
     return continuous_last_time.load() + continuous_step;
 }
 
-// Handles callback sample fanout for memory buffering and periodic frame emission.
+// Handles callback sample fanout for memory buffering and periodic stream frames.
 void CircuitSimulator::handle_continuous_callback_sample(const PackedFloat64Array &sample) {
     const int64_t sample_count = continuous_sample_count.fetch_add(1) + 1;
     push_memory_sample(sample, sample_count);
@@ -1015,6 +863,7 @@ void CircuitSimulator::handle_continuous_callback_sample(const PackedFloat64Arra
     }
 }
 
+// Returns names for values stored in continuous memory samples.
 PackedStringArray CircuitSimulator::get_continuous_memory_signal_names() const {
     std::lock_guard<std::mutex> lock(memory_mutex);
     return memory_signal_names;
@@ -1028,6 +877,7 @@ void CircuitSimulator::refresh_memory_filter_indices_locked() {
         memory_signal_names = callback_signal_names;
         return;
     }
+
     for (int i = 0; i < memory_signal_filter.size(); i++) {
         const String &requested = memory_signal_filter[i];
         const String requested_lower = requested.to_lower();
@@ -1111,14 +961,17 @@ void CircuitSimulator::ingest_callback_signal_names(const PackedStringArray &sig
     memory_samples.clear();
 }
 
+// Public wrapper used by ngspice callbacks to feed in-memory samples.
 void CircuitSimulator::ingest_callback_sample(const PackedFloat64Array &sample) {
     handle_continuous_callback_sample(sample);
 }
 
+// Enables callback-driven in-memory buffering for continuous animation data.
 bool CircuitSimulator::configure_continuous_memory_buffer(const PackedStringArray &signals, int64_t max_samples) {
     if (max_samples < 1) {
         max_samples = 1;
     }
+
     std::lock_guard<std::mutex> lock(memory_mutex);
     memory_samples.clear();
     memory_signal_filter = signals;
@@ -1128,6 +981,7 @@ bool CircuitSimulator::configure_continuous_memory_buffer(const PackedStringArra
     return true;
 }
 
+// Clears buffered callback samples but keeps configuration intact.
 void CircuitSimulator::clear_continuous_memory_buffer() {
     std::lock_guard<std::mutex> lock(memory_mutex);
     memory_samples.clear();
@@ -1143,35 +997,13 @@ Array CircuitSimulator::get_continuous_memory_snapshot() const {
     return out;
 }
 
-// Called from ng_bg_thread_running(false) on the ngspice thread to atomically capture
-// the completed-simulation buffer before ingest_callback_signal_names can clear it.
-void CircuitSimulator::capture_completed_snapshot() {
-    std::lock_guard<std::mutex> lock(memory_mutex);
-    completed_snapshot = memory_samples;
-    completed_signal_names = memory_signal_names;
-}
-
-// Returns the snapshot captured at the most recent simulation completion.
-Array CircuitSimulator::get_last_sim_snapshot() const {
-    std::lock_guard<std::mutex> lock(memory_mutex);
-    Array out;
-    for (const PackedFloat64Array &sample : completed_snapshot) {
-        out.append(sample);
-    }
-    return out;
-}
-
-PackedStringArray CircuitSimulator::get_last_sim_signal_names() const {
-    std::lock_guard<std::mutex> lock(memory_mutex);
-    return completed_signal_names;
-}
-
 // Pops up to count oldest callback samples for incremental consumers.
 Array CircuitSimulator::pop_continuous_memory_samples(int64_t count) {
     Array out;
     if (count <= 0) {
         return out;
     }
+
     std::lock_guard<std::mutex> lock(memory_mutex);
     const int64_t take = std::min<int64_t>(count, static_cast<int64_t>(memory_samples.size()));
     for (int64_t i = 0; i < take; i++) {
@@ -1181,7 +1013,45 @@ Array CircuitSimulator::pop_continuous_memory_samples(int64_t count) {
     return out;
 }
 
+// Returns buffered callback sample count.
 int64_t CircuitSimulator::get_continuous_memory_sample_count() const {
     std::lock_guard<std::mutex> lock(memory_mutex);
     return static_cast<int64_t>(memory_samples.size());
+}
+
+Dictionary CircuitSimulator::get_all_vectors() {
+    Dictionary result;
+    if (!initialized || !ng_CurPlot || !ng_AllVecs || !ng_GetVecInfo) {
+        return result;
+    }
+
+    char *cur_plot = ng_CurPlot();
+    if (!cur_plot) {
+        return result;
+    }
+
+    char **all_vecs = ng_AllVecs(cur_plot);
+    if (!all_vecs) {
+        return result;
+    }
+
+    for (int i = 0; all_vecs[i] != nullptr; i++) {
+        pvector_info vec = ng_GetVecInfo(all_vecs[i]);
+        if (vec && vec->v_realdata) {
+            Array data;
+            for (int j = 0; j < vec->v_length; j++) {
+                data.append(vec->v_realdata[j]);
+            }
+            result[String(all_vecs[i])] = data;
+        }
+    }
+    return result;
+}
+
+Array CircuitSimulator::get_last_sim_snapshot() const {
+    return get_continuous_memory_snapshot();
+}
+
+PackedStringArray CircuitSimulator::get_last_sim_signal_names() const {
+    return get_continuous_memory_signal_names();
 }

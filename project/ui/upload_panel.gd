@@ -425,7 +425,9 @@ func _on_run_pressed() -> void:
 			return
 		# The wrapper deck contains .tran — bg_run picks it up and fires simulation_finished.
 		_refresh_status("native: running simulation on subcircuit…", StatusTone.WARN)
-		_sim.call("run_simulation")
+		var subckt_run_ok: bool = bool(_sim.call("run_simulation"))
+		if not subckt_run_ok:
+			_set_error("run_simulation() failed for the auto-generated subcircuit wrapper. Ensure ngspice is loaded and check output logs for deck errors.")
 		return
 
 	if _sim.has_method("load_netlist"):
@@ -449,7 +451,10 @@ func _on_run_pressed() -> void:
 		# load_netlist preserves top-level .tran commands; bg_run executes them in the background.
 		_refresh_status("native: running simulation (bg_run)…", StatusTone.WARN)
 		_log("[color=lightblue]Starting simulation (bg_run)…[/color]")
-		_sim.call("run_simulation")
+		var run_ok: bool = bool(_sim.call("run_simulation"))
+		if not run_ok:
+			_set_error("run_simulation() failed. Ensure your netlist includes an analysis command (for example .tran) and check ngspice output.")
+			return
 
 	if auto_start_continuous and _sim.has_method("start_continuous_transient"):
 			_configure_stream_output_if_enabled()
@@ -1056,8 +1061,11 @@ func _refresh_status(msg: String, tone: StatusTone = StatusTone.IDLE) -> void:
 
 # Marks an error state and appends a formatted log entry.
 func _set_error(msg: String) -> void:
-	_refresh_status("error", StatusTone.ERROR)
-	_log("[color=tomato][b]Error:[/b][/color] %s" % msg)
+	var text: String = msg.strip_edges()
+	if text.is_empty():
+		text = "Unknown error. Check the output log for details."
+	_refresh_status(text, StatusTone.ERROR)
+	_log("[color=tomato][b]Error:[/b][/color] %s" % text)
 
 # Appends rich-text output to the panel log box.
 func _log(bb: String) -> void:

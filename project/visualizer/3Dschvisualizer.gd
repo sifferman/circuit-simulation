@@ -130,14 +130,25 @@ func load_schematic(path: String) -> bool:
 # ---------- UI setup ----------
 
 func _setup_upload_ui() -> void:
-	var sim_packed = load("res://circuit_simulator.tscn")
-	if sim_packed != null:
-		var sim := (sim_packed as PackedScene).instantiate()
+	var sim: Node = null
+	var sim_packed: Resource = load("res://circuit_simulator.tscn")
+	if sim_packed is PackedScene:
+		sim = (sim_packed as PackedScene).instantiate()
+	else:
+		# Fallback for repos that have the simulator script but no wrapper scene.
+		var sim_script: Resource = load("res://simulator/circuit_simulator.gd")
+		if sim_script is GDScript:
+			var created: Variant = (sim_script as GDScript).new()
+			if created is Node:
+				sim = created as Node
+
+	if sim != null:
 		sim.name = "CircuitSimulator"
-		sim.simulation_finished.connect(_on_simulation_finished)
+		if sim.has_signal("simulation_finished"):
+			sim.connect("simulation_finished", Callable(self, "_on_simulation_finished"))
 		get_parent().add_child.call_deferred(sim)
 	else:
-		push_warning("Could not load res://circuit_simulator.tscn — simulation will be unavailable.")
+		push_warning("Could not create CircuitSimulator (missing res://circuit_simulator.tscn and/or res://simulator/circuit_simulator.gd). Simulation will be unavailable.")
 
 	_sidebar = SidebarPanel.new()
 	_sidebar.name = "Sidebar"
