@@ -11,6 +11,10 @@ extends Control
 @export var continuous_memory_pop_count: int = 256
 const UPLOAD_DIR := "user://uploads"
 
+const WORKSPACE_EXT := ".cvw.zip"
+const WORKSPACE_MANIFEST := "manifest.json"
+const WORKSPACE_FILES_DIR := "files/"
+
 # Emitted when a .sch schematic file is selected — consumed by the 3D visualizer.
 signal schematic_requested(path: String)
 
@@ -19,17 +23,21 @@ signal schematic_requested(path: String)
 signal spice_paired(path: String)
 
 var NETLIST_EXTS: PackedStringArray = PackedStringArray(["spice", "cir", "net", "txt"])
-var XSCHEM_EXTS: PackedStringArray = PackedStringArray(["sch"])
+var XSCHEM_EXTS: PackedStringArray = PackedStringArray(["sch", "sym"])
 
 @onready var upload_button: Button = get_node_or_null("Margin/VBox/ControlsRow/UploadButton") as Button
 @onready var run_button: Button = get_node_or_null("Margin/VBox/ControlsRow/RunButton") as Button
 @onready var continuous_button: Button = get_node_or_null("Margin/VBox/ControlsRow/ContinuousButton") as Button
 @onready var clear_button: Button = get_node_or_null("Margin/VBox/ControlsRow/ClearButton") as Button
+@onready var save_ws_button: Button = get_node_or_null("Margin/VBox/ControlsRow/SaveWorkspaceButton") as Button
+@onready var load_ws_button: Button = get_node_or_null("Margin/VBox/ControlsRow/LoadWorkspaceButton") as Button
 @onready var staged_list: ItemList = get_node_or_null("Margin/VBox/StagedList") as ItemList
+@onready var status_bar: PanelContainer = get_node_or_null("Margin/VBox/StatusBar") as PanelContainer
 @onready var status_prefix: Label = get_node_or_null("Margin/VBox/StatusRow/StatusPrefix") as Label
 @onready var status_value: Label = get_node_or_null("Margin/VBox/StatusRow/StatusValue") as Label
 @onready var output_box: RichTextLabel = get_node_or_null("Margin/VBox/Output") as RichTextLabel
 @onready var file_dialog: FileDialog = get_node_or_null("FileDialog") as FileDialog
+@onready var workspace_dialog: FileDialog = get_node_or_null("WorkspaceDialog") as FileDialog
 
 @onready var drop_zone: PanelContainer = get_node_or_null("Margin/VBox/DropZone") as PanelContainer
 @onready var drop_title: Label = get_node_or_null("Margin/VBox/DropZone/DropZoneMargin/DropZoneVBox/DropTitle") as Label
@@ -43,6 +51,7 @@ var _continuous_signal_connected: bool = false
 var _sim: Node = null
 var _continuous_frame_count: int = 0
 var _using_memory_buffer: bool = false
+var _ws_mode: String = "" # "save" or "load"
 
 # --- Aesthetic theme state (light, "Microsoft-esque") ---
 var _t: Theme = null
@@ -50,6 +59,7 @@ var _sb_panel: StyleBoxFlat = null
 var _sb_panel_hover: StyleBoxFlat = null
 var _sb_drop_idle: StyleBoxFlat = null
 var _sb_drop_flash: StyleBoxFlat = null
+var _sb_status_bar: StyleBoxFlat = null
 
 enum StatusTone { IDLE, OK, WARN, ERROR }
 
@@ -86,9 +96,16 @@ func _ready() -> void:
 		file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILES
 		file_dialog.filters = PackedStringArray([
 			"*.spice, *.cir, *.net, *.txt ; Netlists",
-			"*.sch ; Xschem schematics",
+			"*.sch, *.sym ; Xschem schematics/symbols",
 			"* ; All files"
 		])
+
+	if save_ws_button != null:
+		save_ws_button.pressed.connect(_on_save_workspace_pressed)
+	if load_ws_button != null:
+		load_ws_button.pressed.connect(_on_load_workspace_pressed)
+	if workspace_dialog != null:
+		workspace_dialog.file_selected.connect(_on_workspace_dialog_file_selected)
 
 	# OS drag-and-drop (IMPORTANT):
 	# On Windows, when running from the editor, drag-drop can be intercepted by the editor UI,
@@ -276,10 +293,26 @@ func _poll_web_queue() -> void:
 	var b64: String = str(d.get("base64", ""))
 	var bytes: PackedByteArray = Marshalls.base64_to_raw(b64)
 
+	# If it's a workspace zip, load it instead of staging it normally.
+	if _looks_like_workspace_zip(filename, bytes):
+		var ok_ws: bool = _load_workspace_zip_from_bytes(bytes)
+		if ok_ws:
+			_refresh_status("web: workspace loaded", StatusTone.OK)
+		return
+
 	var ok: bool = _stage_bytes(filename, bytes)
 	if ok:
 		_flash_drop_zone()
 		_refresh_status("web: staged %s (%s)" % [filename, _human_size(bytes.size())], StatusTone.OK)
+
+# Returns true if filename + magic bytes look like a workspace zip.
+func _looks_like_workspace_zip(filename: String, bytes: PackedByteArray) -> bool:
+	var lower := filename.to_lower()
+	if not (lower.ends_with(WORKSPACE_EXT) or lower.ends_with(".zip")):
+		return false
+	if bytes.size() < 2:
+		return false
+	return int(bytes[0]) == 0x50 and int(bytes[1]) == 0x4B
 
 # Evaluates a JS expression and returns it as boolean.
 func _web_eval_bool(expr: String) -> bool:
@@ -515,6 +548,323 @@ func _apply_continuous_frame_ui(frame: Dictionary) -> void:
 	)
 
 # -------------------------------------------------------------------
+# Workspace save/load (ZIP)
+# -------------------------------------------------------------------
+
+func _on_save_workspace_pressed() -> void:
+	if staged.is_empty():
+		_set_error("Nothing to save: stage at least one file first.")
+		return
+
+	if OS.has_feature("web"):
+		_save_workspace_zip_web_download()
+		return
+
+	_ws_mode = "save"
+	if workspace_dialog != null:
+		workspace_dialog.access = FileDialog.ACCESS_FILESYSTEM
+		workspace_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+		workspace_dialog.use_native_dialog = true
+		workspace_dialog.clear_filters()
+		workspace_dialog.add_filter("*%s ; Circuit Visualizer Workspace" % WORKSPACE_EXT)
+		workspace_dialog.current_file = "workspace%s" % WORKSPACE_EXT
+		workspace_dialog.popup_centered_ratio(0.8)
+		_refresh_status("choose workspace save location…", StatusTone.WARN)
+	else:
+		_set_error("WorkspaceDialog node not found in scene.")
+
+func _on_load_workspace_pressed() -> void:
+	if OS.has_feature("web"):
+		var ok: bool = _web_eval_bool("typeof window.godotUploadOpenPicker === 'function'")
+		if not ok:
+			_set_error("Web picker not available.")
+			return
+		JavaScriptBridge.eval("window.godotUploadOpenPicker()", true)
+		_refresh_status("web: choose a workspace zip to load…", StatusTone.WARN)
+		return
+
+	_ws_mode = "load"
+	if workspace_dialog != null:
+		workspace_dialog.access = FileDialog.ACCESS_FILESYSTEM
+		workspace_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+		workspace_dialog.use_native_dialog = true
+		workspace_dialog.clear_filters()
+		workspace_dialog.add_filter("*%s ; Circuit Visualizer Workspace" % WORKSPACE_EXT)
+		workspace_dialog.add_filter("*.zip ; ZIP files")
+		workspace_dialog.popup_centered_ratio(0.8)
+		_refresh_status("choose workspace file to load…", StatusTone.WARN)
+	else:
+		_set_error("WorkspaceDialog node not found in scene.")
+
+func _on_workspace_dialog_file_selected(path: String) -> void:
+	if path.strip_edges() == "":
+		return
+	if _ws_mode == "save":
+		_save_workspace_zip_to_path(path)
+	elif _ws_mode == "load":
+		_load_workspace_zip_from_path(path)
+
+func _save_workspace_zip_web_download() -> void:
+	_ensure_upload_dir()
+
+	var tmp_name := "workspace_%d%s" % [int(Time.get_unix_time_from_system()), WORKSPACE_EXT]
+	var tmp_path := "user://%s" % tmp_name
+
+	var ok := _save_workspace_zip_to_user_path(tmp_path)
+	if not ok:
+		return
+
+	var fa := FileAccess.open(tmp_path, FileAccess.READ)
+	if fa == null:
+		_set_error("Failed to open generated workspace for download.")
+		return
+	var buf: PackedByteArray = fa.get_buffer(fa.get_length())
+	fa.close()
+
+	JavaScriptBridge.download_buffer(buf, "workspace%s" % WORKSPACE_EXT, "application/zip")
+	_refresh_status("web: workspace downloaded", StatusTone.OK)
+	_log("[color=lime]Workspace download started.[/color]")
+
+func _save_workspace_zip_to_path(path: String) -> void:
+	var zip_path := path
+	if not zip_path.to_lower().ends_with(WORKSPACE_EXT):
+		zip_path += WORKSPACE_EXT
+
+	var ok := _save_workspace_zip_to_filesystem_path(zip_path)
+	if ok:
+		_refresh_status("workspace saved: %s" % zip_path.get_file(), StatusTone.OK)
+		_log("[color=lime]Saved workspace %s[/color]" % zip_path)
+
+func _save_workspace_zip_to_filesystem_path(zip_abs_path: String) -> bool:
+	var writer := ZIPPacker.new()
+	var err := writer.open(zip_abs_path, ZIPPacker.APPEND_CREATE)
+	if err != OK:
+		_set_error("Could not create zip: %s (err=%s)" % [zip_abs_path, str(err)])
+		return false
+
+	var manifest := _build_workspace_manifest_for_zip()
+
+	err = writer.start_file(WORKSPACE_MANIFEST)
+	if err != OK:
+		writer.close()
+		_set_error("Zip start_file(manifest) failed (err=%s)" % str(err))
+		return false
+	err = writer.write_file(JSON.stringify(manifest, "\t").to_utf8_buffer())
+	if err != OK:
+		writer.close_file()
+		writer.close()
+		_set_error("Zip write_file(manifest) failed (err=%s)" % str(err))
+		return false
+	writer.close_file()
+
+	for it in (manifest.get("items", []) as Array):
+		if typeof(it) != TYPE_DICTIONARY:
+			continue
+		var item := it as Dictionary
+		var user_path := str(item.get("user_path", ""))
+		var zip_rel := str(item.get("zip_path", ""))
+
+		var fa := FileAccess.open(user_path, FileAccess.READ)
+		if fa == null:
+			writer.close()
+			_set_error("Could not open staged file for zipping: %s" % user_path)
+			return false
+		var buf := fa.get_buffer(fa.get_length())
+		fa.close()
+
+		err = writer.start_file(zip_rel)
+		if err != OK:
+			writer.close()
+			_set_error("Zip start_file(%s) failed (err=%s)" % [zip_rel, str(err)])
+			return false
+		err = writer.write_file(buf)
+		if err != OK:
+			writer.close_file()
+			writer.close()
+			_set_error("Zip write_file(%s) failed (err=%s)" % [zip_rel, str(err)])
+			return false
+		writer.close_file()
+
+	writer.close()
+	return true
+
+func _save_workspace_zip_to_user_path(zip_user_path: String) -> bool:
+	var writer := ZIPPacker.new()
+	var err := writer.open(zip_user_path, ZIPPacker.APPEND_CREATE)
+	if err != OK:
+		_set_error("Could not create zip in user storage: %s (err=%s)" % [zip_user_path, str(err)])
+		return false
+
+	var manifest := _build_workspace_manifest_for_zip()
+
+	err = writer.start_file(WORKSPACE_MANIFEST)
+	if err != OK:
+		writer.close()
+		_set_error("Zip start_file(manifest) failed (err=%s)" % str(err))
+		return false
+	err = writer.write_file(JSON.stringify(manifest, "\t").to_utf8_buffer())
+	if err != OK:
+		writer.close_file()
+		writer.close()
+		_set_error("Zip write_file(manifest) failed (err=%s)" % str(err))
+		return false
+	writer.close_file()
+
+	for it in (manifest.get("items", []) as Array):
+		if typeof(it) != TYPE_DICTIONARY:
+			continue
+		var item := it as Dictionary
+		var user_path := str(item.get("user_path", ""))
+		var zip_rel := str(item.get("zip_path", ""))
+
+		var fa := FileAccess.open(user_path, FileAccess.READ)
+		if fa == null:
+			writer.close()
+			_set_error("Could not open staged file for zipping: %s" % user_path)
+			return false
+		var buf := fa.get_buffer(fa.get_length())
+		fa.close()
+
+		err = writer.start_file(zip_rel)
+		if err != OK:
+			writer.close()
+			_set_error("Zip start_file(%s) failed (err=%s)" % [zip_rel, str(err)])
+			return false
+		err = writer.write_file(buf)
+		if err != OK:
+			writer.close_file()
+			writer.close()
+			_set_error("Zip write_file(%s) failed (err=%s)" % [zip_rel, str(err)])
+			return false
+		writer.close_file()
+
+	writer.close()
+	return true
+
+func _build_workspace_manifest_for_zip() -> Dictionary:
+	var used: Dictionary = {}
+	var items: Array = []
+
+	for e: Dictionary in staged:
+		var display: String = str(e.get("display", "file.bin"))
+		var user_path: String = str(e.get("user_path", ""))
+
+		var zip_name := _sanitize_filename(display)
+		if zip_name == "":
+			zip_name = "file.bin"
+		zip_name = _unique_name(zip_name, used)
+		used[zip_name] = true
+
+		items.append({
+			"name": display,
+			"zip_path": WORKSPACE_FILES_DIR + zip_name,
+			"user_path": user_path,
+			"bytes": int(e.get("bytes", 0)),
+			"kind": str(e.get("kind", "unknown")),
+			"ext": str(e.get("ext", ""))
+		})
+
+	return {
+		"format": "circuit-visualizer-workspace-zip",
+		"version": 1,
+		"created_unix": int(Time.get_unix_time_from_system()),
+		"items": items
+	}
+
+func _unique_name(name: String, used: Dictionary) -> String:
+	if not used.has(name):
+		return name
+	var base := name.get_basename()
+	var ext := name.get_extension()
+	var i := 2
+	while true:
+		var candidate := ""
+		if ext == "":
+			candidate = "%s_%d" % [base, i]
+		else:
+			candidate = "%s_%d.%s" % [base, i, ext]
+		if not used.has(candidate):
+			return candidate
+		i += 1
+	return name
+
+func _load_workspace_zip_from_path(path: String) -> void:
+	var zip_path := path
+	if not (zip_path.to_lower().ends_with(".zip") or zip_path.to_lower().ends_with(WORKSPACE_EXT)):
+		_set_error("Not a zip file: %s" % zip_path)
+		return
+
+	var reader := ZIPReader.new()
+	var err := reader.open(zip_path)
+	if err != OK:
+		_set_error("Could not open workspace zip (err=%s)" % str(err))
+		return
+
+	var manifest_bytes := reader.read_file(WORKSPACE_MANIFEST)
+	if manifest_bytes.is_empty():
+		reader.close()
+		_set_error("Workspace zip missing %s" % WORKSPACE_MANIFEST)
+		return
+
+	var manifest_text := manifest_bytes.get_string_from_utf8()
+	var parsed: Variant = JSON.parse_string(manifest_text)
+	if parsed == null or typeof(parsed) != TYPE_DICTIONARY:
+		reader.close()
+		_set_error("Workspace manifest is not valid JSON.")
+		return
+
+	var m := parsed as Dictionary
+	if str(m.get("format", "")) != "circuit-visualizer-workspace-zip":
+		reader.close()
+		_set_error("Not a circuit-visualizer workspace zip.")
+		return
+
+	var items_var: Variant = m.get("items", [])
+	if typeof(items_var) != TYPE_ARRAY:
+		reader.close()
+		_set_error("Workspace manifest missing items[].")
+		return
+
+	_on_clear_pressed()
+	_ensure_upload_dir()
+
+	var added := 0
+	for it_var in (items_var as Array):
+		if typeof(it_var) != TYPE_DICTIONARY:
+			continue
+		var it := it_var as Dictionary
+		var name := str(it.get("name", "file.bin"))
+		var zip_rel := str(it.get("zip_path", ""))
+
+		if zip_rel == "":
+			continue
+
+		var buf := reader.read_file(zip_rel)
+		if buf.is_empty():
+			_log("[color=yellow]Warning: missing file inside zip: %s[/color]" % zip_rel)
+			continue
+
+		if _stage_bytes(name, buf):
+			added += 1
+
+	reader.close()
+	_refresh_status("workspace loaded: %d file(s)" % added, StatusTone.OK)
+	_log("[color=lime]Loaded workspace (%d files).[/color]" % added)
+
+func _load_workspace_zip_from_bytes(bytes: PackedByteArray) -> bool:
+	var tmp_path := "user://incoming_workspace_%d%s" % [int(Time.get_unix_time_from_system()), WORKSPACE_EXT]
+
+	var f := FileAccess.open(tmp_path, FileAccess.WRITE)
+	if f == null:
+		_set_error("Failed to write workspace zip into user storage.")
+		return false
+	f.store_buffer(bytes)
+	f.close()
+
+	_load_workspace_zip_from_path(tmp_path)
+	return true
+
+# -------------------------------------------------------------------
 # Clear staging
 # -------------------------------------------------------------------
 
@@ -627,7 +977,7 @@ func _normalize_native_path(raw_path: String) -> String:
 # Classifies staged content as netlist/xschem/unknown.
 func _detect_kind(ext: String, bytes: PackedByteArray) -> String:
 	if XSCHEM_EXTS.has(ext):
-		return "xschem (.sch)"
+		return "xschem (.sch/.sym)"
 	if NETLIST_EXTS.has(ext):
 		var head: String = _bytes_head_as_text(bytes, 120).strip_edges()
 		if head.begins_with(".") or head.begins_with("*") or head.find("ngspice") != -1:
@@ -842,6 +1192,19 @@ func _apply_light_theme() -> void:
 
 	theme = _t
 	drop_zone.add_theme_stylebox_override("panel", _sb_drop_idle)
+
+	if status_bar != null:
+		_sb_status_bar = StyleBoxFlat.new()
+		_sb_status_bar.bg_color = Color(0.10, 0.10, 0.10, 0.90)
+		_sb_status_bar.corner_radius_top_left = 8
+		_sb_status_bar.corner_radius_top_right = 8
+		_sb_status_bar.corner_radius_bottom_left = 8
+		_sb_status_bar.corner_radius_bottom_right = 8
+		_sb_status_bar.content_margin_left = 10
+		_sb_status_bar.content_margin_right = 10
+		_sb_status_bar.content_margin_top = 6
+		_sb_status_bar.content_margin_bottom = 6
+		status_bar.add_theme_stylebox_override("panel", _sb_status_bar)
 
 # Temporarily highlights the drop zone after successful staging.
 func _flash_drop_zone() -> void:
