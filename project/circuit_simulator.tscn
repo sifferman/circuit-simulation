@@ -1,15 +1,3 @@
-<<<<<<< HEAD
-[gd_scene format=3]
-
-[ext_resource type="Script" uid="uid://bpjjmafr37qlh" path="res://simulator/circuit_simulator.gd" id="1_mhpxa"]
-
-
-[node name="CircuitSimulator" type="CircuitSimulator"]
-=======
-[gd_scene format=3 uid="uid://cwax34wvymggt"]
-
-[ext_resource type="Script" uid="uid://biqi4yyjt7qw0" path="res://circuit_simulator.gd" id="1_mhpxa"]
+[gd_scene format=3 uid="uid://dnbqvavjdbl5n"]
 
 [node name="CircuitSimulator" type="CircuitSimulator" unique_id=597288703]
->>>>>>> cd7f9eb (visualization and simulation addition)
-script = ExtResource("1_mhpxa")
