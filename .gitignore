@@ -24,12 +24,8 @@ project/bin/*.wasm
 project/bin/*.exp
 project/bin/*.lib
 
-# ngspice source / build
-ngspice/
-
-# Schematic and symbol libraries
-project/schematics/
-project/symbols/
+# Export
+export_presets.cfg
 
 # OS
 .DS_Store

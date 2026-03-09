@@ -30,7 +30,11 @@ This compiles the C++ source in `src/` and places the resulting shared library i
 The simulator dynamically loads ngspice at runtime. To enable simulation:
 
 1. Download ngspice from https://ngspice.sourceforge.io/
+<<<<<<< HEAD
 2. Place `ngspice.dll` (Windows) or `libngspice.so` (Linux) and `sharedspice.h` in a new folder named `ngspice`.
+=======
+2. Place `ngspice.dll` (Windows) or `libngspice.so` (Linux) where Godot can find it (e.g. `project/bin/`).
+>>>>>>> cd7f9eb (visualization and simulation addition)
 3. If building with ngspice headers, uncomment and set the `CPPPATH` line in `SConstruct`.
 
 ### 4. Open in Godot

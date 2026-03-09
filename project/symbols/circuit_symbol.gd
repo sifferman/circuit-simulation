@@ -44,7 +44,7 @@ func setup(comp: Dictionary, definition: SymbolDefinition, scale: float, mat: St
 	for box in definition.boxes:
 		if box.pin_name != "":
 			var c = box.center()
-			pin_positions[box.pin_name] = Vector3(c.x * scale, 0, -c.y * scale)
+			pin_positions[box.pin_name] = Vector3(c.x * scale, 0, c.y * scale)
 
 	# If the symbol has no visual geometry at all, add a small dot marker
 	var has_geometry = definition.lines.size() > 0 \
@@ -60,14 +60,6 @@ func setup(comp: Dictionary, definition: SymbolDefinition, scale: float, mat: St
 		add_child(mi)
 
 
-func highlight(active: bool) -> void:
-	for child in get_children():
-		if child is MeshInstance3D:
-			var m = child.material_override as StandardMaterial3D
-			if m:
-				m.emission_energy_multiplier = 1.0 if active else 0.3
-
-
 func get_pin_position(pin_name: String) -> Vector3:
 	if pin_positions.has(pin_name):
 		return to_global(pin_positions[pin_name])
@@ -77,8 +69,8 @@ func get_pin_position(pin_name: String) -> Vector3:
 # ---------- Geometry Builders ----------
 
 func _add_line_mesh(line: SymbolDefinition.Line, scale: float, mat: StandardMaterial3D) -> void:
-	var from = Vector3(line.p1.x * scale, 0, -line.p1.y * scale)
-	var to = Vector3(line.p2.x * scale, 0, -line.p2.y * scale)
+	var from = Vector3(line.p1.x * scale, 0, line.p1.y * scale)
+	var to = Vector3(line.p2.x * scale, 0, line.p2.y * scale)
 
 	var mid = (from + to) / 2.0
 	var dir = to - from
@@ -103,7 +95,7 @@ func _add_arc_mesh(arc: SymbolDefinition.Arc, scale: float, mat: StandardMateria
 	var start_deg: float = arc.start_angle
 	var sweep_deg: float = arc.sweep_angle
 
-	var center = Vector3(cx, 0, -cy)
+	var center = Vector3(cx, 0, cy)
 
 	# Render arc as connected line segments (thin bars)
 	var segment_count: int = maxi(4, int(abs(sweep_deg) / 360.0 * ARC_SEGMENTS))
@@ -143,8 +135,8 @@ func _add_polygon_mesh(poly: SymbolDefinition.Polygon, scale: float, mat: Standa
 		for i in range(poly.points.size() - 1):
 			var p1: Vector2 = poly.points[i]
 			var p2: Vector2 = poly.points[i + 1]
-			var from = Vector3(p1.x * scale, 0, -p1.y * scale)
-			var to = Vector3(p2.x * scale, 0, -p2.y * scale)
+			var from = Vector3(p1.x * scale, 0, p1.y * scale)
+			var to = Vector3(p2.x * scale, 0, p2.y * scale)
 			var mid = (from + to) / 2.0
 			var dir = to - from
 			var length = dir.length()
@@ -169,9 +161,9 @@ func _add_filled_polygon(points: Array[Vector2], scale: float, mat: StandardMate
 		var p1: Vector2 = points[i]
 		var p2: Vector2 = points[i + 1]
 
-		vertices.append(Vector3(p0.x * scale, 0, -p0.y * scale))
-		vertices.append(Vector3(p1.x * scale, 0, -p1.y * scale))
-		vertices.append(Vector3(p2.x * scale, 0, -p2.y * scale))
+		vertices.append(Vector3(p0.x * scale, 0, p0.y * scale))
+		vertices.append(Vector3(p1.x * scale, 0, p1.y * scale))
+		vertices.append(Vector3(p2.x * scale, 0, p2.y * scale))
 
 		normals.append(Vector3.UP)
 		normals.append(Vector3.UP)

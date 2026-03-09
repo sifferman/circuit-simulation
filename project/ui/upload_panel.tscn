@@ -1,13 +1,19 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene format=3]
 
 [ext_resource type="Script" path="res://ui/upload_panel.gd" id="1"]
 
 [node name="UploadPanel" type="Control"]
+layout_mode = 3
+anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_vertical = 0
 script = ExtResource("1")
 
 [node name="Margin" type="MarginContainer" parent="."]
+layout_mode = 0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = 24.0
@@ -16,116 +22,120 @@ offset_right = -24.0
 offset_bottom = -24.0
 
 [node name="VBox" type="VBoxContainer" parent="Margin"]
-anchor_right = 1.0
-anchor_bottom = 1.0
+layout_mode = 2
 size_flags_horizontal = 3
-size_flags_vertical = 3
+size_flags_vertical = 0
 theme_override_constants/separation = 12
 
 [node name="Header" type="Label" parent="Margin/VBox"]
-text = "Circuit Upload"
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
 theme_override_font_sizes/font_size = 40
-theme_override_colors/font_color = Color(0.82, 0.82, 0.82, 1)
+text = "Circuit Upload"
 
 [node name="Subheader" type="Label" parent="Margin/VBox"]
-text = "Add circuit files here. Godot keeps copies in a safe uploads folder, then on Windows/macOS/Linux we can run ngspice to generate simulation data for the visualizer."
-autowrap_mode = 3
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
 theme_override_font_sizes/font_size = 13
-theme_override_colors/font_color = Color(0.72, 0.72, 0.72, 1)
+text = "Upload or drop your circuit files, we save copies in a safe 'uploads' folder, then (on Windows/macOS/Linux) we run ngspice to generate the data Godot will visualize."
+autowrap_mode = 3
 
 [node name="ControlsRow" type="HBoxContainer" parent="Margin/VBox"]
+layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 10
 
 [node name="UploadButton" type="Button" parent="Margin/VBox/ControlsRow"]
-text = "Upload Files…"
+layout_mode = 2
 size_flags_horizontal = 3
+text = "Upload Files…"
 
 [node name="RunButton" type="Button" parent="Margin/VBox/ControlsRow"]
-text = "Run Simulation"
+layout_mode = 2
 size_flags_horizontal = 3
+text = "Run Simulation"
 
 [node name="ClearButton" type="Button" parent="Margin/VBox/ControlsRow"]
+layout_mode = 2
+size_flags_horizontal = 3
 text = "Clear"
-size_flags_horizontal = 0
 
 [node name="SaveWorkspaceButton" type="Button" parent="Margin/VBox/ControlsRow"]
-text = "Save Workspace…"
-size_flags_horizontal = 0
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Save Workspace"
 
 [node name="LoadWorkspaceButton" type="Button" parent="Margin/VBox/ControlsRow"]
-text = "Load Workspace…"
-size_flags_horizontal = 0
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Load Workspace"
 
 [node name="DropZone" type="PanelContainer" parent="Margin/VBox"]
 custom_minimum_size = Vector2(0, 110)
+layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 0
 
 [node name="DropZoneMargin" type="MarginContainer" parent="Margin/VBox/DropZone"]
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = 14.0
-offset_top = 14.0
-offset_right = -14.0
-offset_bottom = -14.0
+layout_mode = 2
 
 [node name="DropZoneVBox" type="VBoxContainer" parent="Margin/VBox/DropZone/DropZoneMargin"]
-anchor_right = 1.0
-anchor_bottom = 1.0
+layout_mode = 2
 theme_override_constants/separation = 6
 
 [node name="DropTitle" type="Label" parent="Margin/VBox/DropZone/DropZoneMargin/DropZoneVBox"]
-text = "Drop files here"
+layout_mode = 2
 theme_override_font_sizes/font_size = 16
+text = "Drop files here"
 
 [node name="DropHint" type="Label" parent="Margin/VBox/DropZone/DropZoneMargin/DropZoneVBox"]
-text = ".sch, .spice/.cir/.net, .sym, .txt. Native: drop from Explorer onto the app window. Web: use Upload Files."
-autowrap_mode = 3
+layout_mode = 2
 theme_override_font_sizes/font_size = 12
+text = ".sch, .spice/.cir/.net, .txt. Native: drop from Explorer anywhere onto the window. Web: use Upload Files."
+autowrap_mode = 3
 
 [node name="StagedList" type="ItemList" parent="Margin/VBox"]
+custom_minimum_size = Vector2(0, 80)
+layout_mode = 2
 size_flags_horizontal = 3
-size_flags_vertical = 3
+size_flags_vertical = 0
 allow_reselect = true
+auto_height = true
 
-[node name="StatusBar" type="PanelContainer" parent="Margin/VBox"]
-size_flags_horizontal = 3
-
-[node name="StatusRow" type="HBoxContainer" parent="Margin/VBox/StatusBar"]
+[node name="StatusRow" type="HBoxContainer" parent="Margin/VBox"]
+layout_mode = 2
 theme_override_constants/separation = 6
 
-[node name="StatusPrefix" type="Label" parent="Margin/VBox/StatusBar/StatusRow"]
+[node name="StatusPrefix" type="Label" parent="Margin/VBox/StatusRow"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_font_sizes/font_size = 12
 text = "Status:"
-theme_override_font_sizes/font_size = 12
 
-[node name="StatusValue" type="Label" parent="Margin/VBox/StatusBar/StatusRow"]
-text = "idle"
-theme_override_font_sizes/font_size = 12
-
-[node name="Output" type="RichTextLabel" parent="Margin/VBox"]
-size_flags_horizontal = 3
+[node name="StatusValue" type="Label" parent="Margin/VBox/StatusRow"]
+layout_mode = 2
 size_flags_vertical = 3
-fit_content = false
-scroll_active = true
-selection_enabled = true
-bbcode_enabled = true
-default_color = Color(0.10, 0.10, 0.10, 1)
+theme_override_colors/font_color = Color(1, 0.65, 0.2, 1)
+theme_override_font_sizes/font_size = 12
+text = "idle"
 
 [node name="FileDialog" type="FileDialog" parent="."]
-access = 2
+title = "Open File(s)"
 file_mode = 1
+access = 2
+filters = PackedStringArray("*.spice, *.cir, *.net, *.txt ; Netlists", "*.sch, *.sym ; Xschem schematics/symbols", "* ; All files")
 use_native_dialog = true
-title = "Select circuit files"
-filters = PackedStringArray(
-    "*.spice, *.cir, *.net, *.txt ; Netlists",
-    "*.sch, *.sym ; Xschem schematics/symbols",
-    "* ; All files"
-)
 
 [node name="WorkspaceDialog" type="FileDialog" parent="."]
-access = 2
-file_mode = 0
-use_native_dialog = true
 title = "Workspace"
-filters = PackedStringArray("*.cvw.json ; Circuit Visualizer Workspace")
+file_mode = 3
+access = 2
+use_native_dialog = true
+
+[node name="Output" type="RichTextLabel" parent="Margin/VBox"]
+custom_minimum_size = Vector2(0, 120)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+bbcode_enabled = true
+scroll_following = true

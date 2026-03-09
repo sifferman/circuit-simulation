@@ -1,6 +1,7 @@
 class_name SidebarPanel extends Control
 
 signal schematic_requested(path: String)
+signal spice_paired(path: String)
 
 const UPLOAD_PANEL_SCENE := "res://ui/upload_panel.tscn"
 const PANEL_WIDTH: float = 400.0
@@ -40,6 +41,8 @@ func _setup_panel() -> void:
 
 	if _upload_panel.has_signal("schematic_requested"):
 		_upload_panel.schematic_requested.connect(func(path: String): schematic_requested.emit(path))
+	if _upload_panel.has_signal("spice_paired"):
+		_upload_panel.spice_paired.connect(func(path: String): spice_paired.emit(path))
 
 
 func _setup_toggle_button() -> void:

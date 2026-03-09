@@ -1,7 +1,0 @@
-[gd_scene format=3]
-
-[ext_resource type="Script" uid="uid://bpjjmafr37qlh" path="res://simulator/circuit_simulator.gd" id="1_mhpxa"]
-
-
-[node name="CircuitSimulator" type="CircuitSimulator"]
-script = ExtResource("1_mhpxa")
