@@ -1,6 +1,7 @@
 #include "circuit_sim.h"
 
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
 #include <algorithm>
@@ -468,6 +469,28 @@ bool CircuitSimulator::load_ngspice_library() {
         "/usr/local/lib/libngspice.so"
     };
 #else
+#ifdef __EMSCRIPTEN__
+    candidates = {
+        "libngspice.so",
+        "./libngspice.so",
+        "ngspice/libngspice.so",
+        "./ngspice/libngspice.so",
+        "/libngspice.so",
+        "/ngspice/libngspice.so"
+    };
+
+    ProjectSettings *ps = ProjectSettings::get_singleton();
+    if (ps != nullptr) {
+        const String res_ngspice = ps->globalize_path("res://ngspice/libngspice.so");
+        if (!res_ngspice.is_empty()) {
+            candidates.push_back(std::string(res_ngspice.utf8().get_data()));
+        }
+        const String res_nested_ngspice = ps->globalize_path("res://ngspice/ngspice/libngspice.so");
+        if (!res_nested_ngspice.is_empty()) {
+            candidates.push_back(std::string(res_nested_ngspice.utf8().get_data()));
+        }
+    }
+#else
     candidates = {
         "libngspice.so",
         "./libngspice.so",
@@ -476,6 +499,7 @@ bool CircuitSimulator::load_ngspice_library() {
         "/usr/lib/libngspice.so",
         "/usr/local/lib/libngspice.so"
     };
+#endif
 #endif
 
     String attempted_paths;
@@ -554,6 +578,12 @@ bool CircuitSimulator::initialize_ngspice() {
         UtilityFunctions::print("ngspice already initialized");
         return true;
     }
+
+#ifdef __EMSCRIPTEN__
+    if (std::getenv("SPICE_SCRIPTS") == nullptr) {
+        setenv("SPICE_SCRIPTS", "/ngspice/share/ngspice/scripts", 0);
+    }
+#endif
 
     if (!load_ngspice_library()) {
         return false;

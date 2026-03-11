@@ -14,7 +14,7 @@ const _WIRE_FILL_SHADER = preload("res://visualizer/wire_fill.gdshader")
 ## Minimum |ΔV| / Vmax that triggers a cursor (lower = more sensitive).
 @export var dv_anim_threshold: float = 0.04
 
-var parser: SchParser
+var parser: Variant = null
 var _sidebar: SidebarPanel = null
 var _floor: MeshInstance3D = null
 
@@ -91,7 +91,12 @@ var _anim_player:    VisAnimPlayer
 
 
 func _ready() -> void:
-	parser = SchParser.new()
+	if ClassDB.class_exists("SchParser"):
+		parser = ClassDB.instantiate("SchParser")
+	else:
+		push_error("SchParser class is unavailable. Ensure the GDExtension loaded correctly.")
+		return
+
 	_materials = VisMaterialFactory.build_materials()
 	_floor = VisMaterialFactory.create_floor(self)
 	_scene_builder  = VisSceneBuilder.new(self)
@@ -107,6 +112,10 @@ func _process(delta: float) -> void:
 # ---------- Schematic loading ----------
 
 func load_schematic(path: String) -> bool:
+	if parser == null:
+		push_error("SchParser is not initialized.")
+		return false
+
 	if not parser.parse_file(path):
 		push_error("Failed to parse: " + path)
 		return false

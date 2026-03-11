@@ -3,9 +3,55 @@ name: Test Godot Install
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  build-ngspice-wasm:
+    name: Build WASM ngspice
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache libngspice-44.2.zip
+        id: cache-libngspice
+        uses: actions/cache@v4
+        with:
+          path: libngspice-44.2.zip
+          key: libngspice-44.2-${{ hashFiles('.github/docker/ngspice-wasm.Dockerfile') }}
+
+      - name: Set up Docker Buildx
+        if: steps.cache-libngspice.outputs.cache-hit != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ngspice WASM image
+        if: steps.cache-libngspice.outputs.cache-hit != 'true'
+        run: docker build -f .github/docker/ngspice-wasm.Dockerfile -t ngspice-wasm-build .
+
+      - name: Extract libngspice-44.2.zip
+        if: steps.cache-libngspice.outputs.cache-hit != 'true'
+        run: |
+          CID=$(docker create ngspice-wasm-build)
+          docker cp "$CID:/opt/pyodide-install/libngspice-44.2.zip" ./libngspice-44.2.zip
+          docker rm "$CID"
+
+      - name: Upload WASM ngspice artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libngspice-wasm-zip
+          path: libngspice-44.2.zip
+          retention-days: 30
+
   test-godot:
+    needs: build-ngspice-wasm
     runs-on: ubuntu-latest
 
     steps:
@@ -14,11 +60,26 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Download WASM ngspice artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: libngspice-wasm-zip
+          path: ./
+
       - name: Install Godot
         uses: chickensoft-games/setup-godot@v2
         with:
-          version: 4.6.0 # https://www.nuget.org/packages/GodotSharp#versions-body-tab
+          version: 4.5.0 # https://www.nuget.org/packages/GodotSharp#versions-body-tab
           use-dotnet: false
+          include-templates: true
+
+      - name: Verify installed web templates
+        run: |
+          set -euo pipefail
+          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.5.stable"
+          ls -la "$TEMPLATE_DIR"
+          test -f "$TEMPLATE_DIR/web_dlink_nothreads_release.zip"
+          test -f "$TEMPLATE_DIR/web_dlink_nothreads_debug.zip"
 
       - name: Install SCons
         run: sudo apt-get update && sudo apt-get install -y scons
@@ -26,30 +87,85 @@ jobs:
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
 
-      - name: Install Web export templates
-        run: |
-          mkdir -p ~/.local/share/godot/export_templates/4.6.stable
-          cp templates/web_dlink_debug.zip ~/.local/share/godot/export_templates/4.6.stable/
-          cp templates/web_dlink_release.zip ~/.local/share/godot/export_templates/4.6.stable/
-
       - name: Download ngspice header
         run: |
           mkdir -p ngspice
           curl -L https://raw.githubusercontent.com/ngspice/ngspice/master/src/include/ngspice/sharedspice.h \
             -o ngspice/sharedspice.h
 
-      - name: Build GDExtension for Web
+      - name: Build GDExtension libraries
         run: |
           mkdir -p project/bin
-          scons platform=web target=template_debug
+          scons platform=linux target=template_debug
+          scons platform=linux target=template_release
+          scons platform=web target=template_release threads=no
 
       - name: Check build
         run: ls project/bin
-        
-      - name: Export Web build
+
+      - name: Normalize web GDExtension filename
         run: |
-          mkdir -p project/build/web/web_dlink_debug
-          godot --headless --path project --export-debug "Web" build/web/index.html
-        
+          set -euo pipefail
+          EXPECTED="project/bin/libcircuit_sim.web.template_release.wasm32.wasm"
+          if [ ! -f "$EXPECTED" ]; then
+            ACTUAL="$(ls project/bin/libcircuit_sim.web.template_release.wasm32*.wasm | head -n 1 || true)"
+            if [ -z "$ACTUAL" ]; then
+              echo "Could not find built web release wasm in project/bin/"
+              ls -la project/bin
+              exit 1
+            fi
+            cp "$ACTUAL" "$EXPECTED"
+          fi
+
+      - name: Export Web builds
+        run: |
+          cd project
+          mkdir -p build/web/release
+          godot --headless --export-release "Web" build/web/release/index.html
+
+      - name: Package web upload bridge
+        run: |
+          cp project/web/upload_bridge.js project/build/web/release/upload_bridge.js
+
+      - name: Package ngspice WASM files in web release
+        run: |
+          mkdir -p project/build/web/release/ngspice
+          unzip -o ./libngspice-44.2.zip -d project/build/web/release/ngspice
+          if [ -f project/build/web/release/ngspice/ngspice/libngspice.so ] && [ ! -f project/build/web/release/ngspice/libngspice.so ]; then
+            mv project/build/web/release/ngspice/ngspice/libngspice.so project/build/web/release/ngspice/libngspice.so
+          fi
+          if [ -d project/build/web/release/ngspice/ngspice ]; then
+            mkdir -p project/build/web/release/ngspice/lib/ngspice
+            find project/build/web/release/ngspice/ngspice -maxdepth 1 -name '*.cm' -exec mv {} project/build/web/release/ngspice/lib/ngspice/ \;
+            rmdir project/build/web/release/ngspice/ngspice || true
+          fi
+
       - name: Show build output
-        run: ls build/web
+        run: ls -R project/build/web
+
+      - name: Upload web release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-release
+          path: project/build/web/release
+          retention-days: 30
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: project/build/web/release
+
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    needs: test-godot
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -147,7 +147,7 @@ func _on_upload_pressed() -> void:
 	if OS.has_feature("web"):
 		var ok: bool = _web_eval_bool("typeof window.godotUploadOpenPicker === 'function'")
 		if not ok:
-			_set_error("Web picker not available. Did you include res://web/shell/upload_bridge.js in the export HTML?")
+			_set_error("Web picker not available. Ensure upload_bridge.js is next to index.html and included in the export HTML.")
 			return
 		JavaScriptBridge.eval("window.godotUploadOpenPicker()", true)
 		_refresh_status("web: picker opened", StatusTone.WARN)
@@ -356,10 +356,6 @@ func _on_run_pressed() -> void:
 		_set_error("Selected file is not a supported type. Choose .sch, .spice, .cir, .net, or .txt.")
 		return
 
-	if OS.has_feature("web"):
-		_set_error("Web build: ngspice runtime is not supported yet, staging works though.")
-		return
-
 	# Auto-load the paired schematic (same base name) so the 3D scene and
 	# net→wire mapping are ready before simulation results arrive.
 	var sch_pair: Dictionary = _find_matching_sch(entry)
@@ -469,10 +465,6 @@ func _on_run_pressed() -> void:
 
 # Toggles continuous transient mode for the loaded netlist.
 func _on_continuous_pressed() -> void:
-	if OS.has_feature("web"):
-		_set_error("Web build: continuous ngspice mode is not supported.")
-		return
-
 	_sim = _resolve_simulator()
 	if _sim == null:
 		_set_error("Could not find CircuitSimulator node.")
